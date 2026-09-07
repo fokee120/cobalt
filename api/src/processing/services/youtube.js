@@ -3,6 +3,10 @@ import ivm from "isolated-vm";
 
 import { fetch, Request } from "undici";
 import { Innertube, Platform, Session } from "youtubei.js";
+import { existsSync } from "fs";
+import { dirname, resolve } from "path";
+import { fileURLToPath } from "url";
+import { spawn } from "child_process";
 
 import { env } from "../../config.js";
 import { getCookie } from "../cookie/manager.js";
@@ -60,6 +64,39 @@ const hlsCodecList = {
 const clientsWithNoCipher = ['IOS', 'ANDROID', 'YTSTUDIO_ANDROID', 'YTMUSIC_ANDROID'];
 
 const videoQualities = [144, 240, 360, 480, 720, 1080, 1440, 2160, 4320];
+
+const currentDir = dirname(fileURLToPath(import.meta.url));
+const ytDlpBinary = resolve(currentDir, "../../../bin/yt-dlp.exe");
+
+const resolveYtDlpAudio = (id) => new Promise((resolveUrl) => {
+    if (!existsSync(ytDlpBinary)) return resolveUrl();
+
+    const child = spawn(ytDlpBinary, [
+        '--no-warnings',
+        '--no-playlist',
+        '-f', 'bestaudio',
+        '-g', `https://www.youtube.com/watch?v=${id}`
+    ], {
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'ignore']
+    });
+
+    let output = '';
+    const timeout = setTimeout(() => child.kill('SIGTERM'), 30000);
+
+    child.stdout.on('data', chunk => output += chunk);
+    child.on('close', code => {
+        clearTimeout(timeout);
+        if (code !== 0) return resolveUrl();
+
+        const url = output.split(/\r?\n/).map(i => i.trim()).find(i => i.startsWith('http'));
+        resolveUrl(url);
+    });
+    child.on('error', () => {
+        clearTimeout(timeout);
+        resolveUrl();
+    });
+});
 
 const cloneInnertube = async (customFetch, useSession) => {
     const shouldRefreshPlayer = lastRefreshedAt + PLAYER_REFRESH_PERIOD < new Date();
@@ -567,6 +604,12 @@ export default async function (o) {
 
         if (!clientsWithNoCipher.includes(innertubeClient) && innertube) {
             urls = await audio.decipher(innertube.session.player);
+        }
+
+        const ytDlpAudio = await resolveYtDlpAudio(o.id);
+        if (ytDlpAudio) {
+            urls = ytDlpAudio;
+            bestAudio = ytDlpAudio.includes('mime=audio%2Fwebm') ? "opus" : bestAudio;
         }
 
         let cover = `https://i.ytimg.com/vi/${o.id}/maxresdefault.jpg`;
