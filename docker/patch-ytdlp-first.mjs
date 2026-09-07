@@ -6,6 +6,13 @@ let source = readFileSync(path, 'utf8');
 // Give yt-dlp enough time on cold starts / slower YouTube responses.
 source = source.replace('}, 30000);', '}, 90000);');
 
+// Prefer the mweb client so the installed PO-token provider can supply the
+// video-bound GVS token yt-dlp currently recommends for YouTube downloads.
+source = source.replace(
+    "'--no-playlist',\n            '-f', 'bestaudio',",
+    "'--no-playlist',\n            '--extractor-args', 'youtube:player_client=mweb',\n            '-f', 'bestaudio',"
+);
+
 const marker = 'export default async function (o) {\n';
 if (!source.includes(marker)) throw new Error('youtube.js export marker not found');
 
@@ -23,4 +30,4 @@ if (!source.includes(late)) throw new Error('late yt-dlp block not found');
 source = source.replace(late, lateReplacement);
 
 writeFileSync(path, source);
-console.log('Applied yt-dlp-first YouTube audio patch');
+console.log('Applied yt-dlp-first YouTube audio patch with mweb PO-token support');
