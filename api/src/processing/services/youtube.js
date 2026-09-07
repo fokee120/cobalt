@@ -66,36 +66,70 @@ const clientsWithNoCipher = ['IOS', 'ANDROID', 'YTSTUDIO_ANDROID', 'YTMUSIC_ANDR
 const videoQualities = [144, 240, 360, 480, 720, 1080, 1440, 2160, 4320];
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
-const ytDlpBinary = resolve(currentDir, "../../../bin/yt-dlp.exe");
+const bundledYtDlpBinary = resolve(currentDir, "../../../bin/yt-dlp.exe");
+
+function getYtDlpCandidates() {
+    return [
+        process.env.YT_DLP_PATH,
+        process.platform === "win32" && existsSync(bundledYtDlpBinary) ? bundledYtDlpBinary : undefined,
+        "yt-dlp"
+    ].filter(Boolean);
+}
 
 const resolveYtDlpAudio = (id) => new Promise((resolveUrl) => {
-    if (!existsSync(ytDlpBinary)) return resolveUrl();
+    const candidates = getYtDlpCandidates();
+    let index = 0;
 
-    const child = spawn(ytDlpBinary, [
-        '--no-warnings',
-        '--no-playlist',
-        '-f', 'bestaudio',
-        '-g', `https://www.youtube.com/watch?v=${id}`
-    ], {
-        windowsHide: true,
-        stdio: ['ignore', 'pipe', 'ignore']
-    });
+    const tryNext = () => {
+        const binary = candidates[index++];
+        if (!binary) {
+            console.warn(`[youtube] yt-dlp fallback unavailable for ${id}: no executable worked`);
+            return resolveUrl();
+        }
 
-    let output = '';
-    const timeout = setTimeout(() => child.kill('SIGTERM'), 30000);
+        const child = spawn(binary, [
+            '--no-warnings',
+            '--no-playlist',
+            '-f', 'bestaudio',
+            '-g', `https://www.youtube.com/watch?v=${id}`
+        ], {
+            windowsHide: true,
+            stdio: ['ignore', 'pipe', 'pipe']
+        });
 
-    child.stdout.on('data', chunk => output += chunk);
-    child.on('close', code => {
-        clearTimeout(timeout);
-        if (code !== 0) return resolveUrl();
+        let output = '';
+        let errorOutput = '';
+        let settled = false;
+        const timeout = setTimeout(() => {
+            console.warn(`[youtube] yt-dlp fallback timed out for ${id} using ${binary}`);
+            child.kill('SIGTERM');
+        }, 30000);
 
-        const url = output.split(/\r?\n/).map(i => i.trim()).find(i => i.startsWith('http'));
-        resolveUrl(url);
-    });
-    child.on('error', () => {
-        clearTimeout(timeout);
-        resolveUrl();
-    });
+        child.stdout.on('data', chunk => output += chunk);
+        child.stderr.on('data', chunk => errorOutput += chunk);
+        child.on('close', code => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            const url = output.split(/\r?\n/).map(i => i.trim()).find(i => i.startsWith('http'));
+            if (code === 0 && url) {
+                return resolveUrl(url);
+            }
+
+            const details = errorOutput.trim() || output.trim() || `exit code ${code}`;
+            console.warn(`[youtube] yt-dlp fallback failed for ${id} using ${binary}: ${details}`);
+            tryNext();
+        });
+        child.on('error', error => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            console.warn(`[youtube] yt-dlp fallback could not start for ${id} using ${binary}: ${error.message}`);
+            tryNext();
+        });
+    };
+
+    tryNext();
 });
 
 const cloneInnertube = async (customFetch, useSession) => {
