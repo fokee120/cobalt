@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-echo "[startup] starting bgutil PO-token provider on 127.0.0.1:4416"
-node /opt/bgutil/server/build/main.js --host 127.0.0.1 --port 4416 &
+echo "[startup] starting bgutil PO-token provider on port 4416"
+node /opt/bgutil/server/build/main.js --port 4416 &
 BGUTIL_PID=$!
 
 # Give the provider a short head start. Any HTTP response proves the server
